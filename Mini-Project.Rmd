@@ -1,0 +1,372 @@
+---
+title: "Mini Project 1"
+author: "Shivani, Sharan, Ajinkya, Anuhya"
+date: "9/27/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidycensus)
+library(tidyverse)
+library(readxl)
+library(stringr)
+library(reshape2)
+library(ggplot2)
+library(MASS)
+census_api_key("8619541a94bf4531646a060a6effc474837d04b9",install=TRUE,overwrite = TRUE)
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73",
+    "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+```
+
+## Data Preprocessing
+
+
+Loading the data
+```{r}
+data2000 <- get_decennial(geography = "state", 
+                       variables = "P001001", 
+                       year = 2000)
+
+data2010 <- get_decennial(geography = "state", 
+                       variables = "P001001", 
+                       year = 2010)
+
+
+cpi = read_csv("Data/cpi.csv")
+population = read_csv("Data/population.csv")
+SA = read_excel("Data/State_and_US_SA.xls",skip=5)
+state_codes = read.table("Data/statecodes.txt",header=FALSE)
+dens = get_estimates(geography = 'state', product = 'population', year = 2018)
+dens = dens[dens$variable == "DENSITY" , ]
+dens = dens[dens$NAME != "Puerto Rico", ]
+#dens = dens[dens$NAME != "District of Columbia", ]
+
+dens2 = get_estimates(geography = 'state', product = 'population', year = 2018)
+dens2 = dens2[dens2$variable == "POP" , ]
+dens2 = dens2[dens2$NAME != "Puerto Rico", ]
+#dens2 = dens2[dens2$NAME != "District of Columbia", ]
+```
+```{r}
+dates = data.frame(str_split_fixed(SA$Month,"M",n = 2))
+SA$Month = dates$X2
+SA$Year = dates$X1
+SA = SA[,-c(53)]
+new = melt(SA, id.vars = c("Month","Year"))
+cpi_month = data.frame(str_split_fixed(cpi$Period,"M",n = 2))
+cpi$Month = cpi_month$X2
+cpi$Year = as.numeric(cpi$Year)
+cpi$Month = as.numeric(cpi$Month)
+new$Year = as.numeric(new$Year)
+new$Month = as.numeric(new$Month)
+```
+
+```{r}
+new_dataset <- new %>% left_join(cpi , by=c("Year","Month"))
+new_dataset = na.omit(new_dataset)
+new_dataset = new_dataset %>% left_join(state_codes,by=c("variable" = "V2"))
+```
+
+Get the regions of all states in the US
+Function to assign regions according to the State Code 
+```{r}
+NE.name <- c("Connecticut","Maine","Massachusetts","New Hampshire",
+             "Rhode Island","Vermont","New Jersey","New York",
+             "Pennsylvania")
+NE.abrv <- c("CT","ME","MA","NH","RI","VT","NJ","NY","PA")
+NE.ref <- c(NE.name,NE.abrv)
+
+MW.name <- c("Indiana","Illinois","Michigan","Ohio","Wisconsin",
+             "Iowa","Kansas","Minnesota","Missouri","Nebraska",
+             "North Dakota","South Dakota")
+MW.abrv <- c("IN","IL","MI","OH","WI","IA","KS","MN","MO","NE",
+             "ND","SD")
+MW.ref <- c(MW.name,MW.abrv)
+
+S.name <- c("Delaware","District of Columbia","Florida","Georgia",
+            "Maryland","North Carolina","South Carolina","Virginia",
+            "West Virginia","Alabama","Kentucky","Mississippi",
+            "Tennessee","Arkansas","Louisiana","Oklahoma","Texas")
+S.abrv <- c("DE","DC","FL","GA","MD","NC","SC","VA","WV","AL",
+            "KY","MS","TN","AR","LA","OK","TX")
+S.ref <- c(S.name,S.abrv)
+
+W.name <- c("Arizona","Colorado","Idaho","New Mexico","Montana",
+            "Utah","Nevada","Wyoming","Alaska","California",
+            "Hawaii","Oregon","Washington")
+W.abrv <- c("AZ","CO","ID","NM","MT","UT","NV","WY","AK","CA",
+            "HI","OR","WA")
+W.ref <- c(W.name,W.abrv)
+
+region.list <- list(
+  Northeast=NE.ref,
+  Midwest=MW.ref,
+  South=S.ref,
+  West=W.ref)
+```
+
+
+```{r}
+new_dataset$regions <- sapply(new_dataset$variable, 
+                 function(x) names(region.list)[grep(x,region.list)])
+```
+
+Renaming the columns in the final Dataset.
+
+```{r}
+ new_dataset = new_dataset %>% 
+  rename(
+   "State Code" = variable,
+   "Index" = value,
+   "CPI" = Value,
+   "State" =  V3,
+   "Regions" = regions)
+```
+
+Dropping unnecessary columns
+
+```{r}
+drops <- c("V1")
+new_dataset = new_dataset[ , !(names(new_dataset) %in% drops)]
+```
+
+Adding the Price column to the Dataset
+
+*CPI for the year December 2000 = 174.6
+```{r}
+new_dataset$Index = as.numeric(new_dataset$Index)
+new_dataset$Price = (new_dataset$Index / new_dataset$CPI)*174.6 
+```
+
+# Data Visualizations
+
+## House prices over time
+
+How have house prices in the U.S changed since 1975, after adjusting for inflation (i.e. relative to the CPI?)
+
+Find year wise average of the Prices and plot the curve
+```{r}
+year_wise_average = aggregate(Price ~ Year, FUN = mean, data = new_dataset)
+ggplot(year_wise_average,aes(x=Year,y=Price))+
+  geom_point()+
+  geom_smooth(method="gam", formula = y~s(x), se = FALSE,color="#CC79A7")+  ylab('House Price')+
+  ggtitle("Variation in House Prices in the U.S since 1975") + theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+```
+
+### How have the prices varied by State? 
+
+```{r fig.width=10, fig.height=9}
+library(gghighlight)
+state_wise_year_average = aggregate(Price ~ Year + State + Regions , FUN = mean, data = new_dataset)
+ggplot(state_wise_year_average,aes(x=Year,y=Price))+
+  geom_jitter(aes(color=State),alpha=0.5,size=0.6)+ geom_smooth(aes(color=State),mehtod='lm',se=F)+
+  facet_wrap(~Regions , nrow = 2,scales='free_y') + xlab("Year")+ ylab('House Price') +
+  theme(panel.spacing = unit(1.5,"cm")) + theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5)) + ggtitle("State Wise Variation in House Prices in the U.S since 1975 faceted by Region ") + theme(axis.title=element_text(size=20),axis.text=element_text(size=14), legend.position = "bottom", axis.text.x=element_text(size=12))
+```
+
+- Which states have seen the biggest increases in real house prices, and which have seen the biggest decreases?
+- Have changes in prices within each state mostly followed the same basic pattern,and are there outliers to that pattern?
+
+
+
+### Do the typical patterns vary between the four regions (Northeast, Midwest, South, and West)?
+
+```{r fig.height=6}
+region_wise_year_average = aggregate(Price ~ Year + Regions, FUN = mean, data = new_dataset)
+ggplot(region_wise_year_average,aes(x=Year,y=Price))+
+  geom_point()+ geom_smooth(method="gam", formula = y~s(x), se = FALSE,color="#CC79A7")+ facet_wrap(~ Regions, ncol =2) + ylab('House Price') + theme(panel.spacing = unit(1,"cm")) +  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5)) +  theme(axis.title=element_text(size=13)) + labs(title = "Region Wise Variation in House Prices in the U.S since 1975")
+```
+
+## Population Density and change in house prices
+
+### Does present-day population densityexplain changes in house prices by state since 1975?
+
+
+```{r}
+state_wise_1975 = state_wise_year_average[state_wise_year_average$Year=="1975",]
+state_wise_2019 = state_wise_year_average[state_wise_year_average$Year=="2019",]
+change_house_prices = (abs(state_wise_2019$Price - state_wise_1975$Price))/(state_wise_1975$Price)*100
+```
+
+dataframes for visualizing variation in house Price since 1975 w.r.t to population density
+
+```{r}
+dec18 = new_dataset[new_dataset$Month== 12 & new_dataset$Year== 2018,]
+jan75 = new_dataset[new_dataset$Month== 1 & new_dataset$Year== 1975,]
+change_house_prices = c(((dec18$Price - jan75$Price)/ jan75$Price)* 100)
+state_abbrev_cut = state_codes[1:51,]
+state_abbrev_cut = state_abbrev_cut[order(state_abbrev_cut$V3),]
+state_wise_1975 = state_wise_1975[order(state_wise_1975$State),]
+dens = dens[order(dens$NAME),]
+population_price = data.frame(state_abbrev_cut$V2,state_wise_1975$State,change_house_prices,dens$value)
+```
+
+```{r}
+nrow(dec18)
+```
+
+Renaming the columns in Population 
+
+```{r}
+names(population_price)[names(population_price) == 'state_wise_1975.State'] = 'State'
+names(population_price)[names(population_price) == 'dens.value'] = 'Population_Density'
+names(population_price)[names(population_price) == 'state_abbrev_cut.V2'] = 'Code'
+```
+
+```{r fig.width=12}
+ggplot(population_price,aes(x=log(Population_Density),y=change_house_prices))+geom_point()+ geom_smooth(method='rlm',color='#0072B2',se=FALSE) + theme(legend.position = "None") +  geom_text(aes(label = Code), size = 5) + geom_smooth(method='lm',color='#D55E00',se=FALSE) + ylab('Change in House Prices') + xlab('Present Population Density (Log Scale)') + ggtitle("Variation in House Prices since 1975 with respect to present Population Density") +  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+```
+
+```{r}
+population_price_nodc = population_price[!population_price$State == 'DISTRICTOFCOLUMBIA',]
+```
+
+
+## With DC removed as an outlier
+
+```{r fig.width=12}
+ggplot(population_price_nodc,aes(x=log(Population_Density),y=change_house_prices))+geom_point()+ geom_smooth(method='rlm',color='#0072B2',se=FALSE) + theme(legend.position = "None") +  geom_text(aes(label = Code), size = 5) + geom_smooth(method='lm',color='#D55E00',se=FALSE) + ylab('Change in House Prices') + xlab('Present Population Density (Log Scale)') + ggtitle("Variation in House Prices since 1975 with respect to present Population Density (without DC)") +  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+
+```
+
+- Are there outliers to the relationship,and if so,  is there a principled reason to drop them?
+- What does the relationship look like after dropping or down weighting outliers?  
+
+
+### Does the relationship vary by region?  If so, how?
+
+```{r}
+population_price_nodc$regions <- sapply(population_price_nodc$Code, 
+                 function(x) names(region.list)[grep(x,region.list)])
+```
+
+```{r fig.width=8}
+ggplot(population_price_nodc,aes(x=log(Population_Density),y=change_house_prices))+geom_point()+ geom_smooth(method='rlm',color='#D55E00',se=FALSE) + theme(legend.position = "bottom") + facet_wrap(~regions) + ylab('Change in House Prices') + xlab('Present Population Density (Log Scale)') + ggtitle("Variation in House Prices by Region since 1975 with respect to present Population Density") +  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+```
+
+### Is there a relationship betweenchanges in population and changes in house prices?  To answer this, look at changes in eachstate over three time periods:  1990 to 2000, 2000 to 2010, and 2010 to the present.  Analyzethe three time periods separately.  
+
+### Has the relationship changed over the three time periods? Are there variations by region?
+
+### 1990 to 2000 Population vs Price
+
+```{r}
+state_wise_1990 = state_wise_year_average[state_wise_year_average$Year=="1990",]
+state_wise_2000 = state_wise_year_average[state_wise_year_average$Year=="2000",]
+state_wise_1990 = state_wise_1990[order(state_wise_1990$State),]
+state_wise_2000 = state_wise_2000[order(state_wise_2000$State),]
+population  = population[order(population$`NHGIS Integrated State Name`),]
+population = population[-c(52),]
+
+change_pp1 = data_frame(matrix(NA,nrow=51,ncol=3))
+change_pp1$State = state_wise_1990$State
+change_pp1$Price = (state_wise_2000$Price - state_wise_1990$Price)/(state_wise_1990$Price)*100
+change_pp1$Population = (population$`2000: Persons: Total` - population$`1990: Persons: Total`)/(population$`1990: Persons: Total`)*100
+```
+```{r}
+change_pp1$Code = state_abbrev_cut$V2
+change_pp1$Regions <- sapply(change_pp1$Code, 
+                 function(x) names(region.list)[grep(x,region.list)])
+```
+
+```{r fig.width=8}
+ggplot(change_pp1,aes(x=log(Population),y=Price))+geom_point() +geom_smooth(method='rlm',color='#D55E00',se=FALSE) + geom_text(aes(label = Code), size = 5)  + ylab('Percent Change in House Prices (1990-2000)') + xlab('Percent Change in Population (1990-2000)') + ggtitle("Price vs Population for Time Period 1990-2000") +  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+```
+
+
+
+
+```{r fig.width=8}
+ggplot(change_pp1,aes(x=log(Population),y=Price))+geom_point() +geom_smooth(method='rlm',color='#D55E00',se=FALSE) + facet_wrap(~Regions) + ylab('Percent Change in House Prices (1990-2000)') + xlab('Percent Change in Population (1990-2000)') + ggtitle(" Price vs Population Region Wise for Time Period 1990-2000") +  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+```
+
+
+### 2000 to 2010 Population vs Price
+
+```{r}
+state_wise_2010 = state_wise_year_average[state_wise_year_average$Year=="2010",]
+state_wise_2010 = state_wise_2010[order(state_wise_2010$State),]
+change_pp2 = data_frame(matrix(NA,nrow=51,ncol=3))
+change_pp2$State = state_wise_2000$State
+change_pp2$Price = (state_wise_2010$Price - state_wise_2000$Price)/(state_wise_2000$Price)*100
+change_pp2$Population = (population$`2010: Persons: Total` - population$`2000: Persons: Total`)/(population$`2000: Persons: Total`)*100
+```
+
+```{r}
+change_pp2$Code = state_abbrev_cut$V2
+change_pp2$Regions <- sapply(change_pp2$Code, 
+                 function(x) names(region.list)[grep(x,region.list)])
+```
+
+
+```{r fig.width=8}
+ggplot(change_pp2,aes(x=log(Population),y=Price))+geom_point() +geom_smooth(method='rlm',color='#D55E00',se=FALSE) + geom_text(aes(label = Code), size = 5) + ylab('Percent Change in House Prices (2000-2010)') + xlab('Percent Change in Population (2000-2010)') + ggtitle("Price vs Population for Time Period 2000-2010") +  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+
+```
+
+
+
+
+
+```{r fig.width=8}
+ggplot(change_pp2,aes(x=log(Population),y=Price))+geom_point() +geom_smooth(method='rlm',color='#D55E00',se=FALSE) + facet_wrap(~Regions) + ylab('Percent Change in House Prices (2000-2010)') + xlab('Percent Change in Population (2000-2010)') + ggtitle(" Price vs Population Region Wise for Time Period 2000-2010") +  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+```
+
+
+
+### 2010 to present Population vs Price
+
+
+
+```{r}
+state_wise_2019 = state_wise_year_average[state_wise_year_average$Year=="2019",]
+state_wise_2019 = state_wise_2019[order(state_wise_2019$State),]
+change_pp3 = data_frame(matrix(NA,nrow=51,ncol=3))
+change_pp3$State = state_wise_2010$State
+change_pp3$Price = (state_wise_2019$Price - state_wise_2010$Price)/(state_wise_2010$Price)*100
+dens2 = dens2[order(dens$NAME),]
+change_pp3$Population = (dens2$value - population$`2010: Persons: Total`)/(population$`2010: Persons: Total`)*100
+```
+```{r}
+change_pp3$Code = state_abbrev_cut$V2
+change_pp3$Regions <- sapply(change_pp3$Code, 
+                 function(x) names(region.list)[grep(x,region.list)])
+```
+
+```{r fig.width=8}
+ggplot(change_pp3,aes(x=log(Population),y=Price))+geom_point()  +geom_smooth(method='rlm',color='#D55E00',se=FALSE) + geom_text(aes(label = Code), size = 5) + ylab('Percent Change in House Prices (2010-Present)') + xlab('Percent Change in Population (2010-Present) (Log Scale)') + ggtitle("Price vs Population for Time Period 2010-Present") +  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+
+```
+
+
+
+```{r fig.width=8}
+ggplot(change_pp3,aes(x=log(Population),y=Price))+geom_point() +geom_smooth(method='rlm',color='#D55E00',se=FALSE) + facet_wrap(~Regions) + ylab('Percent Change in House Prices (2010-Present)') + xlab('Percent Change in Population (2010-Present) (Log Scale)') + ggtitle("Price vs Population Region Wise for Time Period 2010-Present") +  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+```
+
+### Population vs Price comparision of the three decades
+
+
+creation of data frame for 3 decades comparison
+```{r}
+change_pp1$Year = '1990-2000'
+change_pp2$Year = '2000-2010'
+change_pp3$Year = '2010-Present'
+```
+
+
+```{r}
+change_1 = rbind(change_pp1,change_pp2)
+Change = rbind(change_1,change_pp3 )
+```
+
+```{r, fig.height= 6 , fig.width=8}
+ggplot(Change ,aes(x=log(Population),y=Price , group = Year, color = Year )) + geom_point() + geom_smooth(method='rlm',se=FALSE)+ facet_wrap(Year~. , labeller = "label_both") + scale_color_manual(values = cb_palette ) + labs(color ="year") +
+ggtitle("Population Change v/s Housing Price Change") + ylab ("Percent House Price Change") + xlab("Percent Population Change (Log Scale)") + theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+```
+
+```{r, fig.height= 6 , fig.width=8}
+ggplot(Change ,aes(x=log(Population),y=Price , group = Year, color = Year )) + geom_point() + geom_smooth(method='lm',se=FALSE)+ facet_wrap(Regions~. , labeller = "label_both") + scale_color_manual(values = cb_palette ) + labs(color ="year") +  ggtitle("Population Change V/s Housing Price Change") + ylab ("Percent House Price Change") + xlab("Percent Population Change  (Log Scale)") + theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+```
+
+
