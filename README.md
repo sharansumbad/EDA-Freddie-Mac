@@ -1,5 +1,4 @@
 # EDA-Freddie-Mac
-
 Exploratory Data Analysis of Freedie Mac Housing Data
 
 -	Evaluated the variation in US House price since 1975 with respect to different demographics such as Region and State after adjusting for inflation.
